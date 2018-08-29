@@ -23,6 +23,49 @@ from models.instancenormrs import *
 
 from torch.utils.data import Dataset
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def tensor_transform(element):
+    if isinstance(element, list):
+        for i,each in enumerate(element):
+            while len(each.shape) != 4:
+                each = each[None,...]
+            if not isinstance(each, torch.Tensor):
+                each=torch.FloatTensor(each)
+            if each.shape[1]!=3:
+                each = each.transpose(1,3).transpose(2,3)
+            element[i]=each
+    elif isinstance(element, np.ndarray) or isinstance(element, torch.Tensor):
+        while len(element.shape) != 4:
+            element = element[None,...]
+        if not isinstance(element, torch.Tensor):
+            element = torch.FloatTensor(element)
+        if element.shape[1]!=3:
+            return element.transpose(1,3).transpose(2,3)
+    return element
+
+def input_transform(img, mode=None, level=None):
+    assert isinstance(img,list), "input img should be in list (blurred_img_pyramid, blurred_img), (sharp_img_pyramid, sharp_img) or (blurred_img_pyramid, blurred_img)"
+    if len(img)==2:
+        blurredLP, blurred = img
+    else:
+        blurredLP, blurred, sharpLP, sharp = img
+    if mode is None or mode=='deblurgan':
+        if level is None:
+            return blurred
+        return blurredLP[level]
+    elif mode == 'unet':
+        blurredGP = get_gaussian_pyramid(np.transpose(blurred[0].numpy(), [1,2,0]))
+        blurredGP = torch.FloatTensor(blurredGP[-level-1][None,...]).transpose(1,3).transpose(2,3)
+        main_blurred = blurredLP[level]
+        blurred_img = blurredGP.float()
+        main_blurred = torch.cat([main_blurred, blurred_img],1)
+        return main_blurred
+    elif mode == 'resnet':
+        main_blurred, aux_blurred = get_network_tensors(blurredLP, base_lvl=level)
+        return main_blurred, aux_blurred
+
 def readcv2(path, desired_shape=([360,480],[640])):
     imgr = imread(path)[...,:3]
     if imgr.ndim != 3:
@@ -79,7 +122,7 @@ def reconstructLP(LapP):
     return img_as_float(np.clip(rec,0,1))
 
 class GOPRO_extended(Dataset):
-    def __init__(self, basicfolder='datasets/deblur/', train=True, include_sharp=0,
+    def __init__(self, basicfolder='/data/datasets/deblur/', train=True, include_sharp=0,
                  include_coco=None, returnLP=3, transform=None, desired_shape=([360,480],[480]), crop=None):
         
         self.basicfolder = basicfolder
@@ -254,7 +297,7 @@ def extract_patches(img, kernel_size=(64,64)):
     return list_of_crops
 
 class GOPRO_bp(Dataset):
-    def __init__(self, basicfolder='data/deblur/', train=True, include_sharp=0,
+    def __init__(self, basicfolder='/data/datasets/deblur/', train=True, include_sharp=0,
                  include_coco=None, include_blur_patterns=('/data/datasets/blur_patterns/',0),
                  returnLP=3, transform=False, desired_shape=([360,480],[480]), crop=None):
         """
